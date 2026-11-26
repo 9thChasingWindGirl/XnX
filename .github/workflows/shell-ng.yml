@@ -65,6 +65,32 @@ jobs:
           if (-not (Test-Path $exe)) { throw "build output missing: $exe" }
           Write-Host "exe size: $((Get-Item $exe).Length)"
 
+      # --- Swap libmpv: upstream shell-ng ships mpv 0.41 (no DV P7 FEL).
+      # Replace with zhongfly LGPL baseline 0.42+ (PR #17932, DV FEL support).
+      # LGPL build chosen explicitly; v3/AVX2 builds rejected (old-CPU compat).
+      - name: Stage DV-capable libmpv
+        shell: pwsh
+        env:
+          MPV_TAG: '2026-11-26-1eab28e7b5'
+          MPV_ASSET: 'mpv-dev-lgpl-x86_64-20261126-git-1eab28e7b5.7z'
+        run: |
+          $url = "https://github.com/zhongfly/mpv-winbuild/releases/download/$env:MPV_TAG/$env:MPV_ASSET"
+          Invoke-WebRequest -Uri $url -OutFile mpv-dev.7z
+          New-Item -ItemType Directory -Force mpv-dev | Out-Null
+          7z x mpv-dev.7z -ompv-dev -y | Out-Null
+          $dll = Get-ChildItem mpv-dev -Recurse -Filter 'libmpv-2.dll' | Select-Object -First 1
+          if (-not $dll) { throw 'libmpv-2.dll not found in zhongfly asset' }
+          Copy-Item $dll.FullName shell\libmpv-2.dll -Force
+          # provenance (license traceability)
+          "asset: $env:MPV_ASSET`ntag: $env:MPV_TAG`nlicence: LGPL`nsource: $url" | Set-Content shell\MPV-SOURCE.txt
+          # Verify this build is NOT the FEL-unsupported variant
+          $bytes = [IO.File]::ReadAllBytes('shell\libmpv-2.dll')
+          $text = [Text.Encoding]::ASCII.GetString($bytes)
+          if ($text -match 'enhancement layers is currently unsupported') {
+            throw 'zhongfly DLL still reports DV enhancement layers unsupported'
+          }
+          Write-Host "DV-capable libmpv staged: $((Get-Item 'shell\libmpv-2.dll').Length) bytes"
+
       # --- Stage bundle (source-of-truth: what user downloads to Localverify/) ---
       - name: Stage bundle
         shell: pwsh
@@ -75,6 +101,7 @@ jobs:
           Copy-Item shell\libmpv-2.dll $dst\ -Force
           Copy-Item shell\bin\* $dst\ -Recurse -Force
           Copy-Item shell\server.js $dst\ -Force
+          Copy-Item shell\MPV-SOURCE.txt $dst\ -Force
           Write-Host "bundle ready: $((Get-ChildItem $dst -Recurse -File).Count) files"
 
       - uses: actions/upload-artifact@v4
