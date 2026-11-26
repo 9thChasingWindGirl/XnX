@@ -35,11 +35,37 @@ jobs:
           token: ${{ secrets.PAT || github.token }}
 
       # --- Upstream binaries only (not in our source repo) ---
-      - name: Fetch upstream binary deps
+      # Cached by upstream HEAD sha; avoids re-cloning 370MB of bin/mpv every run.
+      - name: Resolve upstream HEAD
+        id: upstream
+        shell: bash
+        run: |
+          SHA=$(git ls-remote https://github.com/${{ env.UPSTREAM_REPO }}.git refs/heads/main | cut -f1)
+          echo "sha=$SHA" >> $GITHUB_OUTPUT
+
+      - name: Cache upstream binaries
+        id: cache-upstream
+        uses: actions/cache@v4
+        with:
+          path: |
+            upstream/libmpv-2_x64.zip
+            upstream/bin
+            upstream/mpv-x64
+            upstream/server.js
+          key: upstream-bin-${{ steps.upstream.outputs.sha }}
+
+      - name: Fetch upstream binary deps (cache miss only)
+        if: steps.cache-upstream.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
           git clone --depth 1 https://github.com/${{ env.UPSTREAM_REPO }}.git upstream
-          # build.rs needs these at source root; installer needs bin/ + server.js
+          Write-Host "cloned upstream binaries"
+
+      # Runs on both hit and miss: upstream/ is populated either way.
+      # build.rs needs libmpv zip at source root; installer needs bin/ + server.js.
+      - name: Stage upstream binaries into source tree
+        shell: pwsh
+        run: |
           Copy-Item upstream\libmpv-2_x64.zip shell\ -Force
           Copy-Item upstream\bin shell\ -Recurse -Force
           Copy-Item upstream\mpv-x64 shell\ -Recurse -Force
@@ -51,6 +77,14 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
+
+      # Cache compiled deps + registry, keyed by Cargo.lock. Source unchanged
+      # → no recompilation of the ~100 crates on every CI tweak.
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: shell
+          shared-key: shell-ng-release
 
       - name: Build shell (release)
         shell: cmd
@@ -68,19 +102,39 @@ jobs:
       # --- Swap libmpv: upstream shell-ng ships mpv 0.41 (no DV P7 FEL).
       # Replace with zhongfly LGPL baseline 0.42+ (PR #17932, DV FEL support).
       # LGPL build chosen explicitly; v3/AVX2 builds rejected (old-CPU compat).
+      - name: Cache DV-capable libmpv (fixed tag)
+        id: cache-mpv
+        uses: actions/cache@v4
+        with:
+          path: dv-mpv/libmpv-2.dll
+          key: zhongfly-libmpv-20261126-lgpl-x64
+
+      - name: Download DV-capable libmpv (cache miss only)
+        if: steps.cache-mpv.outputs.cache-hit != 'true'
+        env:
+          MPV_TAG: '2026-11-26-1eab28e7b5'
+          MPV_ASSET: 'mpv-dev-lgpl-x86_64-20261126-git-1eab28e7b5.7z'
+        shell: pwsh
+        run: |
+          $url = "https://github.com/zhongfly/mpv-winbuild/releases/download/$env:MPV_TAG/$env:MPV_ASSET"
+          # GitHub sometimes 504s large release assets; curl retries transient errors.
+          curl.exe -fL --retry 5 --retry-delay 5 --retry-all-errors -o mpv-dev.7z $url
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path mpv-dev.7z)) { throw "download failed: $url" }
+          New-Item -ItemType Directory -Force mpv-dev dv-mpv | Out-Null
+          7z x mpv-dev.7z -ompv-dev -y | Out-Null
+          $dll = Get-ChildItem mpv-dev -Recurse -Filter 'libmpv-2.dll' | Select-Object -First 1
+          if (-not $dll) { throw 'libmpv-2.dll not found in zhongfly asset' }
+          Copy-Item $dll.FullName dv-mpv\libmpv-2.dll -Force
+
       - name: Stage DV-capable libmpv
         shell: pwsh
         env:
           MPV_TAG: '2026-11-26-1eab28e7b5'
           MPV_ASSET: 'mpv-dev-lgpl-x86_64-20261126-git-1eab28e7b5.7z'
         run: |
+          if (-not (Test-Path dv-mpv\libmpv-2.dll)) { throw 'cached/downloaded DV libmpv missing' }
+          Copy-Item dv-mpv\libmpv-2.dll shell\libmpv-2.dll -Force
           $url = "https://github.com/zhongfly/mpv-winbuild/releases/download/$env:MPV_TAG/$env:MPV_ASSET"
-          Invoke-WebRequest -Uri $url -OutFile mpv-dev.7z
-          New-Item -ItemType Directory -Force mpv-dev | Out-Null
-          7z x mpv-dev.7z -ompv-dev -y | Out-Null
-          $dll = Get-ChildItem mpv-dev -Recurse -Filter 'libmpv-2.dll' | Select-Object -First 1
-          if (-not $dll) { throw 'libmpv-2.dll not found in zhongfly asset' }
-          Copy-Item $dll.FullName shell\libmpv-2.dll -Force
           # provenance (license traceability)
           "asset: $env:MPV_ASSET`ntag: $env:MPV_TAG`nlicence: LGPL`nsource: $url" | Set-Content shell\MPV-SOURCE.txt
           # Verify FEL support by MPV VERSION, not by substring search:
