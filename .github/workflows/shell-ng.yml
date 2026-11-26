@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 env:
-  SHELL_REPO: XnX_Shell          # our private fork of stremio-shell-ng
+  SHELL_REPO: XnX_shell          # our PRIVATE fork (note lowercase 's')
   UPSTREAM_REPO: Stremio/stremio-shell-ng
 
 jobs:
@@ -24,12 +24,15 @@ jobs:
         run: git config --global core.autocrlf false
 
       # --- Our source (private) ---
-      - name: Checkout our shell source
+      - name: Checkout our shell source (private repo)
         uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/${{ env.SHELL_REPO }}
           ref: main
           path: shell
+          # GITHUB_TOKEN cannot read a DIFFERENT private repo; needs a PAT
+          # with `repo` scope stored as Actions secret `PAT`.
+          token: ${{ secrets.PAT || github.token }}
 
       # --- Upstream binaries only (not in our source repo) ---
       - name: Fetch upstream binary deps
