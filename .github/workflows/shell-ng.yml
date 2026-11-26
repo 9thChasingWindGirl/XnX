@@ -120,7 +120,7 @@ jobs:
           # GitHub sometimes 504s large release assets; curl retries transient errors.
           curl.exe -fL --retry 5 --retry-delay 5 --retry-all-errors -o mpv-dev.7z $url
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path mpv-dev.7z)) { throw "download failed: $url" }
-          New-Item -ItemType Directory -Force mpv-dev dv-mpv | Out-Null
+          New-Item -ItemType Directory -Force mpv-dev, dv-mpv | Out-Null
           7z x mpv-dev.7z -ompv-dev -y | Out-Null
           $dll = Get-ChildItem mpv-dev -Recurse -Filter 'libmpv-2.dll' | Select-Object -First 1
           if (-not $dll) { throw 'libmpv-2.dll not found in zhongfly asset' }
