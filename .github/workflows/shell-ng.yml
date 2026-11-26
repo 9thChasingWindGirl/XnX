@@ -83,13 +83,20 @@ jobs:
           Copy-Item $dll.FullName shell\libmpv-2.dll -Force
           # provenance (license traceability)
           "asset: $env:MPV_ASSET`ntag: $env:MPV_TAG`nlicence: LGPL`nsource: $url" | Set-Content shell\MPV-SOURCE.txt
-          # Verify this build is NOT the FEL-unsupported variant
+          # Verify FEL support by MPV VERSION, not by substring search:
+          # the "enhancement layers is currently unsupported" string also
+          # exists in FFmpeg/libdovi paths of FEL-capable builds, so it is
+          # NOT a reliable negative signal. PR #17932 (DV FEL) landed in 0.42.0.
           $bytes = [IO.File]::ReadAllBytes('shell\libmpv-2.dll')
           $text = [Text.Encoding]::ASCII.GetString($bytes)
-          if ($text -match 'enhancement layers is currently unsupported') {
-            throw 'zhongfly DLL still reports DV enhancement layers unsupported'
-          }
-          Write-Host "DV-capable libmpv staged: $((Get-Item 'shell\libmpv-2.dll').Length) bytes"
+          $vers = [regex]::Matches($text, 'mpv v?0\.(\d+)\.(\d+)[^\x00]{0,30}') | ForEach-Object { $_.Value } | Select-Object -Unique
+          Write-Host "mpv version strings found: $($vers -join ' | ')"
+          $ver = [regex]::Match($text, 'mpv v?0\.(\d+)\.(\d+)')
+          if (-not $ver.Success) { throw 'cannot find mpv version string in DLL' }
+          $minor = [int]$ver.Groups[1].Value
+          $patch = $ver.Groups[2].Value
+          if ($minor -lt 42) { throw "mpv 0.$minor.$patch < 0.42: no DV FEL support (PR #17932)" }
+          Write-Host "DV-capable libmpv staged: mpv 0.$minor.$patch, $((Get-Item 'shell\libmpv-2.dll').Length) bytes"
 
       # --- Stage bundle (source-of-truth: what user downloads to Localverify/) ---
       - name: Stage bundle
