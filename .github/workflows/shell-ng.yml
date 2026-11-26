@@ -1,0 +1,81 @@
+name: shell-ng build
+
+# Build the forked stremio-shell-ng (Rust + WebView2 + mpv) from OUR private
+# shell repo. Large binaries (mpv/ffmpeg/runtime/server.js) are NOT stored in
+# the source repo — pulled from upstream at build time instead.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SHELL_REPO: XnX_Shell          # our private fork of stremio-shell-ng
+  UPSTREAM_REPO: Stremio/stremio-shell-ng
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      # Upstream CI disables EOL translation: rustfmt/build is line-ending sensitive.
+      - name: disable git eol translation
+        run: git config --global core.autocrlf false
+
+      # --- Our source (private) ---
+      - name: Checkout our shell source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/${{ env.SHELL_REPO }}
+          ref: main
+          path: shell
+
+      # --- Upstream binaries only (not in our source repo) ---
+      - name: Fetch upstream binary deps
+        shell: pwsh
+        run: |
+          git clone --depth 1 https://github.com/${{ env.UPSTREAM_REPO }}.git upstream
+          # build.rs needs these at source root; installer needs bin/ + server.js
+          Copy-Item upstream\libmpv-2_x64.zip shell\ -Force
+          Copy-Item upstream\bin shell\ -Recurse -Force
+          Copy-Item upstream\mpv-x64 shell\ -Recurse -Force
+          Copy-Item upstream\server.js shell\ -Force
+          Write-Host "binaries staged: $((Get-ChildItem shell\bin -File).Count) files in bin/"
+
+      # --- Rust build ---
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build shell (release)
+        shell: cmd
+        working-directory: shell
+        run: |
+          cargo build --release --target x86_64-pc-windows-msvc
+
+      - name: Verify build
+        shell: pwsh
+        run: |
+          $exe = 'shell\target\x86_64-pc-windows-msvc\release\stremio-shell-ng.exe'
+          if (-not (Test-Path $exe)) { throw "build output missing: $exe" }
+          Write-Host "exe size: $((Get-Item $exe).Length)"
+
+      # --- Stage bundle (source-of-truth: what user downloads to Localverify/) ---
+      - name: Stage bundle
+        shell: pwsh
+        run: |
+          $dst = 'bundle'
+          New-Item -ItemType Directory -Force $dst | Out-Null
+          Copy-Item shell\target\x86_64-pc-windows-msvc\release\stremio-shell-ng.exe $dst\ -Force
+          Copy-Item shell\libmpv-2.dll $dst\ -Force
+          Copy-Item shell\bin\* $dst\ -Recurse -Force
+          Copy-Item shell\server.js $dst\ -Force
+          Write-Host "bundle ready: $((Get-ChildItem $dst -Recurse -File).Count) files"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shell-ng-bundle
+          path: bundle/
+          retention-days: 14
