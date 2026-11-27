@@ -29,7 +29,15 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Cache wasm-pack binary
+        id: cache-wasm-pack
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/wasm-pack
+          key: wasm-pack-v1
+
       - name: Install wasm-pack
+        if: steps.cache-wasm-pack.outputs.cache-hit != 'true'
         shell: pwsh
         run: cargo install wasm-pack --locked
 
@@ -41,15 +49,19 @@ jobs:
           GH_TOKEN: ${{ secrets.PAT || github.token }}
         run: |
           git config --global core.autocrlf false
-          $ErrorActionPreference = 'Continue'
           ./scripts/assemble-full.ps1 2>&1 | Tee-Object -FilePath assemble.log
-          $failed = $LASTEXITCODE -ne 0
-          if ($failed) {
-            Get-Content assemble.log | Select-String -Pattern 'throw|failed|error|FAIL' -Context 0,2 | ForEach-Object {
-              $line = ($_.Line + ' ' + ($_.Context.PostContext -join ' ')) -replace "`n",' '
-              Write-Output "::error::$line"
+
+      # The assemble script uses $ErrorActionPreference=Stop and throws, which
+      # aborts the pipeline before inline error handling can run. A separate
+      # failure-only step always sees the log and surfaces it as annotations.
+      - name: Surface assemble errors
+        if: failure()
+        shell: pwsh
+        run: |
+          if (Test-Path assemble.log) {
+            Get-Content assemble.log | Select-Object -Last 50 | ForEach-Object {
+              Write-Output "::error::$_"
             }
-            exit 1
           }
 
       - name: Package
