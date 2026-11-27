@@ -1,0 +1,41 @@
+# Fast compile gate for our stremio-core fork (endpoint-free model + v26 migration).
+name: core check
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/XnX_core
+          ref: main
+          path: core
+          token: ${{ secrets.PAT || github.token }}
+
+      - name: disable git eol translation
+        run: git config --global core.autocrlf false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: cargo check (core + core-web WASM)
+        shell: pwsh
+        working-directory: core
+        run: |
+          cargo check --target wasm32-unknown-unknown -p stremio-core 2>&1 | Tee-Object -FilePath core-check.log
+          if ($LASTEXITCODE -ne 0) {
+            Get-Content core-check.log | Select-String -Pattern '^error' -Context 0,4 | ForEach-Object {
+              $line = ($_.Line + ' ' + ($_.Context.PostContext -join ' ')) -replace "`n",' '
+              Write-Output "::error::$line"
+            }
+            exit $LASTEXITCODE
+          }
