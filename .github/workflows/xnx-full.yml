@@ -284,13 +284,11 @@ jobs:
         shell: pwsh
         run: python scripts/check-dlls.py bundle
 
-      - name: Package
-        shell: pwsh
-        run: |
-          Compress-Archive -Path bundle/* -DestinationPath xnx-bundle.zip -Force
-
+      # Upload the bundle directory directly — upload-artifact does the single
+      # zip. (Previously we zipped to xnx-bundle.zip AND artifact zipped that,
+      # producing a pointless nested zip.)
       - uses: actions/upload-artifact@v4
         with:
           name: xnx-full-bundle
-          path: xnx-bundle.zip
+          path: bundle/
           retention-days: 14
