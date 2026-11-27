@@ -78,39 +78,31 @@ jobs:
       # --- Encrypt providers: compile Node-side JS to V8 bytecode (.jsc) ---
       # Must use the SAME Node version as stremio-runtime.exe (18.12.1 x64).
       # V8 rejects bytecode compiled by a different Node version.
-      - name: Setup Node 18.12.1 for bytenode
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18.12.1'
-
-      - name: Compile providers to V8 bytecode
+      # --- Obfuscate providers Node-side JS (version-agnostic, no ABI lock) ---
+      # Unlike V8 bytecode, obfuscated JS runs on any Node version/arch.
+      - name: Obfuscate providers
         shell: pwsh
         run: |
           node --version
           Push-Location providers
-          npm install bytenode@1.3.6 --no-save --ignore-scripts
-          if ($LASTEXITCODE -ne 0) { throw 'bytenode install failed' }
+          npm install javascript-obfuscator@5.11.0 --no-save --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { throw 'obfuscator install failed' }
           Pop-Location
-          node providers/scripts/bytenode-build.js providers bundle/providers
-          if ($LASTEXITCODE -ne 0) { throw 'bytenode compile failed' }
-          $js = Get-ChildItem bundle\providers -Recurse -File -Filter '*.js' |
-            Where-Object { $_.FullName -notmatch 'assets|vendor' -and $_.Name -ne 'server.js' }
-          Write-Host "readable Node JS left in bundle: $($js.Count) (should be 0; launcher server.js excluded)"
+          node providers/scripts/obfuscate.js providers bundle/providers
+          if ($LASTEXITCODE -ne 0) { throw 'obfuscation failed' }
 
-      - name: Smoke test encrypted provider
+      - name: Smoke test obfuscated provider
         shell: pwsh
         run: |
-          # Boot the encrypted launcher and send one IPC manifest request.
-          # This proves .jsc modules (with rewritten relative requires) load
-          # correctly under Node 18.12.1 — compile success alone is not enough.
-          # b64url of {"kind":"local"}
-          $cfg = 'eyJraW5kIjoibG9jYWwifQ'
+          # Boot the obfuscated server and send one IPC manifest request.
+          # Runs on the CI's default Node (22) — proving no Node-version lock.
+          $cfg = 'eyJraW5kIjoibG9jYWwifQ'  # b64url of {"kind":"local"}
           $line = "{`"id`":1,`"method`":`"GET`",`"url`":`"/local/$cfg/manifest.json`"}"
           $out = $line | node bundle/providers/server.js --ipc 2>&1 | Out-String
           Write-Host $out
-          if ($LASTEXITCODE -ne 0) { throw "encrypted launcher failed: $out" }
-          if ($out -notmatch 'org.xnx.local') { throw "manifest missing from encrypted provider: $out" }
-          Write-Host 'encrypted provider smoke test PASS'
+          if ($LASTEXITCODE -ne 0) { throw "obfuscated server failed: $out" }
+          if ($out -notmatch 'org.xnx.local') { throw "manifest missing from obfuscated provider: $out" }
+          Write-Host 'obfuscated provider smoke test PASS (Node-version-agnostic)'
 
       # --- Build the Windows shell from our fork (assemble-full.ps1 cloned it) ---
       # Upstream binaries are NOT in our source repo; cached by upstream HEAD.
