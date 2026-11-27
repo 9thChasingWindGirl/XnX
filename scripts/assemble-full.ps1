@@ -25,23 +25,32 @@ New-Item -ItemType Directory -Force $dst | Out-Null
 Copy-Item (Join-Path $Root 'providers\*') $dst -Recurse -Force
 Write-Host 'providers staged (no build needed)'
 
-# core WASM: requires Rust + wasm-pack (GitHub runner installs these).
-# Build stremio-core-web to produce the npm package our UI depends on.
-Write-Host '=== build core-web WASM ==='
-Push-Location (Join-Path $Root 'core')
+# core-web WASM -> npm package. Our fork's endpoint-free streaming_server
+# model MUST reach the UI, so UI must consume OUR core-web, not the npm one.
+Write-Host '=== build core-web WASM (wasm-pack) ==='
+Push-Location (Join-Path $Root 'core\stremio-core-web')
 & rustup target add wasm32-unknown-unknown
-& cargo build --target wasm32-unknown-unknown --release -p stremio-core-web
-if ($LASTEXITCODE -ne 0) { throw 'core build failed' }
+& wasm-pack build --no-typescript --no-pack --out-dir wasm_build --release --target web
+if ($LASTEXITCODE -ne 0) { throw 'core-web wasm-pack build failed' }
+# match upstream build.sh: relocate wasm + babel the JS glue
+Move-Item .\wasm_build\stremio_core_web_bg.wasm .\stremio_core_web_bg.wasm -Force
+& npx babel .\wasm_build\stremio_core_web.js --config-file .\.babelrc --out-file .\stremio_core_web.js
+& npx babel .\src\bridge.js --config-file .\.babelrc --out-file .\bridge.js
+& npx babel .\src\worker.js --config-file .\.babelrc --out-file .\worker.js
+if ($LASTEXITCODE -ne 0) { throw 'core-web babel failed' }
 Pop-Location
 
-# UI: pnpm build -> build/ (static files). Depends on core-web npm package.
-Write-Host '=== build UI ==='
+# UI: point @stremio/stremio-core-web at OUR built package, then build.
+Write-Host '=== build UI (with our core-web) ==='
 Push-Location (Join-Path $Root 'ui')
 & corepack enable
-& pnpm install --frozen-lockfile
+& pnpm install --no-frozen-lockfile
+& pnpm add "@stremio/stremio-core-web@file:../core/stremio-core-web"
+if ($LASTEXITCODE -ne 0) { throw 'UI core-web link failed' }
 & pnpm run build
 if ($LASTEXITCODE -ne 0) { throw 'UI build failed' }
 Pop-Location
+New-Item -ItemType Directory -Force (Join-Path $Root 'bundle\ui') | Out-Null
 Copy-Item (Join-Path $Root 'ui\build\*') (Join-Path $Root 'bundle\ui') -Recurse -Force
 
 Write-Host "bundle staged: $((Get-ChildItem (Join-Path $Root 'bundle') -Recurse -File).Count) files"

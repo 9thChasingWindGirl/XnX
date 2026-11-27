@@ -29,6 +29,10 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Install wasm-pack
+        shell: pwsh
+        run: cargo install wasm-pack --locked
+
       # Assemble sources from private repos (fine-grained PAT via secret).
       - name: Assemble sources
         shell: pwsh
