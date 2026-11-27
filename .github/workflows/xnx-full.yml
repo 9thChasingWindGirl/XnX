@@ -4,9 +4,8 @@
 name: xnx-full build
 
 on:
+  # XnX: full assemble needs all four private repos + PAT; run manually only.
   workflow_dispatch:
-  push:
-    branches: [main]
 
 permissions:
   contents: read

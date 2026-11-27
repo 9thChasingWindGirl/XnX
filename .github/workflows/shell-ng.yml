@@ -4,8 +4,8 @@ name: shell-ng build
 # shell repo. Large binaries (mpv/ffmpeg/runtime/server.js) are NOT stored in
 # the source repo — pulled from upstream at build time instead.
 on:
-  push:
-    branches: [main]
+  # XnX: full build is expensive (370MB upstream + packaging). Trigger manually
+  # instead of on every build-repo push; shell-check.yml is the push gate.
   workflow_dispatch:
 
 permissions:
