@@ -196,6 +196,38 @@ jobs:
           if ($minor -lt 42) { throw "mpv 0.$($ver.Value) < 0.42: no DV FEL support" }
           Write-Host "DV libmpv OK: 0.$minor"
 
+      # --- Bundle Vulkan loader (libmpv's only non-system DLL dependency) ---
+      # libmpv imports vulkan-1.dll unconditionally; without it Windows
+      # refuses to load the DLL even when playback uses d3d11. Ship the
+      # official LunarG VulkanRT loader so users need no GPU-driver install.
+      - name: Cache Vulkan runtime
+        id: cache-vulkan
+        uses: actions/cache@v4
+        with:
+          path: |
+            vulkan-runtime/vulkan-1.dll
+            vulkan-runtime/VULKAN-SOURCE.txt
+          key: vulkan-rt-1.3.296.0-x64
+
+      - name: Fetch Vulkan loader (cache miss only)
+        if: steps.cache-vulkan.outputs.cache-hit != 'true'
+        shell: pwsh
+        env:
+          VK_ZIP: 'VulkanRT-1.3.296.0-Components.zip'
+          VK_URL: 'https://sdk.lunarg.com/sdk/download/1.3.296.0/windows/VulkanRT-1.3.296.0-Components.zip'
+        run: |
+          curl.exe -fL --retry 5 --retry-delay 5 --retry-all-errors -o vk-components.zip $env:VK_URL
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path vk-components.zip)) { throw "VulkanRT download failed: $env:VK_URL" }
+          7z x vk-components.zip -oVKExtract -y | Out-Null
+          $dll = Get-ChildItem VKExtract -Recurse -Filter 'vulkan-1.dll' |
+            Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
+          if (-not $dll) { throw 'x64/vulkan-1.dll not found in VulkanRT components' }
+          New-Item -ItemType Directory -Force vulkan-runtime | Out-Null
+          Copy-Item $dll.FullName vulkan-runtime\vulkan-1.dll -Force
+          "asset: $env:VK_ZIP`nsource: $env:VK_URL`nlicence: Apache-2.0 (Khronos Vulkan Loader)" |
+            Set-Content vulkan-runtime\VULKAN-SOURCE.txt
+          Write-Host "Vulkan loader staged: $((Get-Item vulkan-runtime\vulkan-1.dll).Length) bytes"
+
       # Shell binary + mpv + bin/ go to bundle ROOT; ui/ and providers/ are
       # already staged in subfolders by assemble-full.ps1. One complete bundle.
       - name: Stage shell into bundle
@@ -209,6 +241,10 @@ jobs:
           # users into `node server.js`. Our service is providers/server.js,
           # launched internally by the exe over IPC.
           Copy-Item shell\MPV-SOURCE.txt bundle\ -Force
+          # Non-system runtime DLLs our binary imports — ship them all so the
+          # program runs on a clean Windows install with no extra downloads.
+          Copy-Item vulkan-runtime\vulkan-1.dll bundle\ -Force
+          Copy-Item vulkan-runtime\VULKAN-SOURCE.txt bundle\ -Force
           # Startup guide — the exe is the only entry point. There is no
           # root server.js on purpose (that was the old upstream service).
           $guide = @(
@@ -241,6 +277,12 @@ jobs:
           path: assemble.log
           if-no-files-found: ignore
           retention-days: 3
+
+      # Fail the build if any shipped binary imports a DLL that is neither in
+      # the bundle nor a Windows system component (e.g. vulkan-1.dll).
+      - name: Check runtime DLL dependencies
+        shell: pwsh
+        run: python scripts/check-dlls.py bundle
 
       - name: Package
         shell: pwsh
