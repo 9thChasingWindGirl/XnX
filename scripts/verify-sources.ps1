@@ -55,4 +55,4 @@ foreach ($repo in $Repos) {
 if ($failed.Count -gt 0) {
     throw "BUILD GATE FAILED - source repos not verified:`n$($failed -join "`n")"
 }
-Write-Host 'BUILD GATE PASS — all source repos verified'
+Write-Host 'BUILD GATE PASS - all source repos verified'
