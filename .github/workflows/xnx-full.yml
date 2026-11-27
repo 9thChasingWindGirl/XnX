@@ -71,7 +71,12 @@ jobs:
         id: upstream
         shell: bash
         run: |
-          SHA=$(git ls-remote https://github.com/Stremio/stremio-shell-ng.git refs/heads/main | cut -f1)
+          # assemble-full set an Authorization extraheader with our PAT, which
+          # is scoped to OUR repos only — sending it to Stremio's public repo
+          # can be rejected. Clear it just for this ls-remote.
+          SHA=$(git -c http.https://github.com/.extraheader= \
+            ls-remote https://github.com/Stremio/stremio-shell-ng.git refs/heads/main | cut -f1)
+          if [ -z "$SHA" ]; then echo "ls-remote failed" >&2; exit 1; fi
           echo "sha=$SHA" >> $GITHUB_OUTPUT
 
       - name: Cache upstream binaries
@@ -88,7 +93,11 @@ jobs:
       - name: Fetch upstream binary deps (cache miss only)
         if: steps.cache-upstream.outputs.cache-hit != 'true'
         shell: pwsh
-        run: git clone --depth 1 https://github.com/Stremio/stremio-shell-ng.git upstream
+        run: |
+          # clear our scoped PAT header before cloning the public upstream repo
+          git config --global --unset-all "http.https://github.com/.extraheader" 2>$null
+          git clone --depth 1 https://github.com/Stremio/stremio-shell-ng.git upstream
+          if ($LASTEXITCODE -ne 0) { throw 'upstream clone failed' }
 
       - name: Stage upstream binaries into shell tree
         shell: pwsh
