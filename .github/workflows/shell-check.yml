@@ -52,9 +52,13 @@ jobs:
         shell: pwsh
         run: git clone --depth 1 https://github.com/${{ env.UPSTREAM_REPO }}.git upstream
 
-      - name: Stage libmpv zip into source tree
+      - name: Stage upstream binaries into source tree
         shell: pwsh
-        run: Copy-Item upstream\libmpv-2_x64.zip shell\ -Force
+        run: |
+          Copy-Item upstream\libmpv-2_x64.zip shell\ -Force
+          # process.rs tests launch bin/stremio-runtime.exe as a Node runtime.
+          Copy-Item upstream\bin shell\ -Recurse -Force
+          Write-Host "staged bin/: $((Get-ChildItem shell\bin -File).Count) files"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
