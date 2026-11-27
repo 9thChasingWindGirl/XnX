@@ -75,6 +75,28 @@ jobs:
             }
           }
 
+      # --- Encrypt providers: compile Node-side JS to V8 bytecode (.jsc) ---
+      # Must use the SAME Node version as stremio-runtime.exe (18.12.1 x64).
+      # V8 rejects bytecode compiled by a different Node version.
+      - name: Setup Node 18.12.1 for bytenode
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18.12.1'
+
+      - name: Compile providers to V8 bytecode
+        shell: pwsh
+        run: |
+          node --version
+          Push-Location providers
+          npm install bytenode@1.3.6 --no-save --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { throw 'bytenode install failed' }
+          Pop-Location
+          node providers/scripts/bytenode-build.js providers bundle/providers
+          if ($LASTEXITCODE -ne 0) { throw 'bytenode compile failed' }
+          $js = Get-ChildItem bundle\providers -Recurse -File -Filter '*.js' |
+            Where-Object { $_.FullName -notmatch 'assets|vendor' }
+          Write-Host "readable Node JS left in bundle: $($js.Count) (should be 0)"
+
       # --- Build the Windows shell from our fork (assemble-full.ps1 cloned it) ---
       # Upstream binaries are NOT in our source repo; cached by upstream HEAD.
       - name: Resolve upstream HEAD
