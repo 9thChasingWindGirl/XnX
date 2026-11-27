@@ -1,0 +1,44 @@
+# Fast compile/test gate for XnX shell changes (no 370MB upstream download,
+# no packaging). Push to XnX_shell main then this checks our Rust code.
+name: shell check
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/XnX_shell
+          ref: main
+          path: shell
+          token: ${{ secrets.PAT || github.token }}
+
+      - name: disable git eol translation
+        run: git config --global core.autocrlf false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: shell
+
+      - name: cargo check
+        shell: pwsh
+        working-directory: shell
+        run: cargo check --target x86_64-pc-windows-msvc
+
+      - name: cargo test (stremio_server + player)
+        shell: pwsh
+        working-directory: shell
+        run: cargo test --target x86_64-pc-windows-msvc stremio_server

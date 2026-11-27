@@ -1,0 +1,51 @@
+# XnX full build — assembles core/ui/providers/shell from our source repos.
+# NOTE: enable only after XnX_core / XnX_ui / XnX_providers repos exist and
+# READ_PRIVATE_REPOS secret is configured (fine-grained PAT, Contents:read).
+name: xnx-full build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  BUILD_ORG: ${{ github.repository_owner }}
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchains
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install Node/pnpm
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Assemble sources from private repos (fine-grained PAT via secret).
+      - name: Assemble sources
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.READ_PRIVATE_REPOS }}
+        run: |
+          git config --global core.autocrlf false
+          ./scripts/assemble-full.ps1
+
+      - name: Package
+        shell: pwsh
+        run: |
+          Compress-Archive -Path bundle/* -DestinationPath xnx-bundle.zip -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xnx-full-bundle
+          path: xnx-bundle.zip
+          retention-days: 14
