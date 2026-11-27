@@ -71,11 +71,10 @@ jobs:
         id: upstream
         shell: bash
         run: |
-          # assemble-full set an Authorization extraheader with our PAT, which
-          # is scoped to OUR repos only — sending it to Stremio's public repo
-          # can be rejected. Clear it just for this ls-remote.
-          SHA=$(git -c http.https://github.com/.extraheader= \
-            ls-remote https://github.com/Stremio/stremio-shell-ng.git refs/heads/main | cut -f1)
+          # assemble-full set an Authorization extraheader with our scoped PAT
+          # — sending it to Stremio's public repo returns HTTP 400. Unset it.
+          git config --global --unset-all "http.https://github.com/.extraheader" 2>/dev/null || true
+          SHA=$(git ls-remote https://github.com/Stremio/stremio-shell-ng.git refs/heads/main | cut -f1)
           if [ -z "$SHA" ]; then echo "ls-remote failed" >&2; exit 1; fi
           echo "sha=$SHA" >> $GITHUB_OUTPUT
 
