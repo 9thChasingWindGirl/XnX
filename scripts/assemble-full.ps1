@@ -5,6 +5,18 @@ $ErrorActionPreference = 'Stop'
 $Org = $env:BUILD_ORG
 if (-not $Org) { $Org = '9thChasingWindGirl' }
 $Root = Get-Location
+
+# Configure git auth for the private repos. GH_TOKEN alone is NOT picked up by
+# bare `git clone` — we must install an Authorization extraheader. GitHub
+# Actions masks the token in logs automatically.
+$token = $env:GH_TOKEN
+if ($token) {
+    $basic = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("x-access-token:$token"))
+    git config --global "http.https://github.com/.extraheader" "AUTHORIZATION: basic $basic"
+    Write-Host 'git auth configured for github.com'
+} else {
+    Write-Host 'WARNING: GH_TOKEN empty; private repos may fail to clone'
+}
 $Repos = @(
     @{ Name = 'core';      Repo = 'XnX_core' },
     @{ Name = 'ui';        Repo = 'XnX_ui' },

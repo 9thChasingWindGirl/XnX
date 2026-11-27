@@ -33,14 +33,24 @@ jobs:
         shell: pwsh
         run: cargo install wasm-pack --locked
 
-      # Assemble sources from private repos (fine-grained PAT via secret).
+      # Assemble sources from private repos. Same PAT as the check workflows
+      # (verified working); READ_PRIVATE_REPOS was never configured.
       - name: Assemble sources
         shell: pwsh
         env:
-          GH_TOKEN: ${{ secrets.READ_PRIVATE_REPOS }}
+          GH_TOKEN: ${{ secrets.PAT || github.token }}
         run: |
           git config --global core.autocrlf false
-          ./scripts/assemble-full.ps1
+          $ErrorActionPreference = 'Continue'
+          ./scripts/assemble-full.ps1 2>&1 | Tee-Object -FilePath assemble.log
+          $failed = $LASTEXITCODE -ne 0
+          if ($failed) {
+            Get-Content assemble.log | Select-String -Pattern 'throw|failed|error|FAIL' -Context 0,2 | ForEach-Object {
+              $line = ($_.Line + ' ' + ($_.Context.PostContext -join ' ')) -replace "`n",' '
+              Write-Output "::error::$line"
+            }
+            exit 1
+          }
 
       - name: Package
         shell: pwsh
