@@ -22,7 +22,8 @@ jobs:
       - name: Install toolchains
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32-unknown-unknown
+          # wasm32 for core-web, msvc for the Windows shell binary
+          targets: wasm32-unknown-unknown,x86_64-pc-windows-msvc
 
       - name: Install Node/pnpm
         uses: actions/setup-node@v4
@@ -63,6 +64,102 @@ jobs:
               Write-Output "::error::$_"
             }
           }
+
+      # --- Build the Windows shell from our fork (assemble-full.ps1 cloned it) ---
+      # Upstream binaries are NOT in our source repo; cached by upstream HEAD.
+      - name: Resolve upstream HEAD
+        id: upstream
+        shell: bash
+        run: |
+          SHA=$(git ls-remote https://github.com/Stremio/stremio-shell-ng.git refs/heads/main | cut -f1)
+          echo "sha=$SHA" >> $GITHUB_OUTPUT
+
+      - name: Cache upstream binaries
+        id: cache-upstream
+        uses: actions/cache@v4
+        with:
+          path: |
+            upstream/libmpv-2_x64.zip
+            upstream/bin
+            upstream/mpv-x64
+            upstream/server.js
+          key: upstream-bin-${{ steps.upstream.outputs.sha }}
+
+      - name: Fetch upstream binary deps (cache miss only)
+        if: steps.cache-upstream.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: git clone --depth 1 https://github.com/Stremio/stremio-shell-ng.git upstream
+
+      - name: Stage upstream binaries into shell tree
+        shell: pwsh
+        run: |
+          Copy-Item upstream\libmpv-2_x64.zip shell\ -Force
+          Copy-Item upstream\bin shell\ -Recurse -Force
+          Copy-Item upstream\mpv-x64 shell\ -Recurse -Force
+          Copy-Item upstream\server.js shell\ -Force
+
+      - name: Build shell (release)
+        shell: cmd
+        working-directory: shell
+        run: cargo build --release --target x86_64-pc-windows-msvc
+
+      - name: Verify shell exe
+        shell: pwsh
+        run: |
+          $exe = 'shell\target\x86_64-pc-windows-msvc\release\stremio-shell-ng.exe'
+          if (-not (Test-Path $exe)) { throw "shell exe missing: $exe" }
+          Write-Host "exe size: $((Get-Item $exe).Length)"
+
+      # Swap in DV-capable libmpv (0.42+, PR #17932 FEL support).
+      - name: Cache DV-capable libmpv
+        id: cache-mpv
+        uses: actions/cache@v4
+        with:
+          path: dv-mpv/libmpv-2.dll
+          key: zhongfly-libmpv-20261126-lgpl-x64
+
+      - name: Download DV libmpv (cache miss only)
+        if: steps.cache-mpv.outputs.cache-hit != 'true'
+        env:
+          MPV_TAG: '2026-11-26-1eab28e7b5'
+          MPV_ASSET: 'mpv-dev-lgpl-x86_64-20261126-git-1eab28e7b5.7z'
+        shell: pwsh
+        run: |
+          $url = "https://github.com/zhongfly/mpv-winbuild/releases/download/$env:MPV_TAG/$env:MPV_ASSET"
+          curl.exe -fL --retry 5 --retry-delay 5 --retry-all-errors -o mpv-dev.7z $url
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path mpv-dev.7z)) { throw "mpv download failed: $url" }
+          New-Item -ItemType Directory -Force mpv-dev, dv-mpv | Out-Null
+          7z x mpv-dev.7z -ompv-dev -y | Out-Null
+          $dll = Get-ChildItem mpv-dev -Recurse -Filter 'libmpv-2.dll' | Select-Object -First 1
+          if (-not $dll) { throw 'libmpv-2.dll not found in zhongfly asset' }
+          Copy-Item $dll.FullName dv-mpv\libmpv-2.dll -Force
+
+      - name: Stage DV libmpv + provenance
+        shell: pwsh
+        run: |
+          if (-not (Test-Path dv-mpv\libmpv-2.dll)) { throw 'DV libmpv missing' }
+          Copy-Item dv-mpv\libmpv-2.dll shell\libmpv-2.dll -Force
+          $url = "https://github.com/zhongfly/mpv-winbuild/releases/download/2026-11-26-1eab28e7b5/mpv-dev-lgpl-x86_64-20261126-git-1eab28e7b5.7z"
+          "asset: mpv-dev-lgpl-x86_64-20261126-git-1eab28e7b5.7z`ntag: 2026-11-26-1eab28e7b5`nlicence: LGPL`nsource: $url" | Set-Content shell\MPV-SOURCE.txt
+          $bytes = [IO.File]::ReadAllBytes('shell\libmpv-2.dll')
+          $text = [Text.Encoding]::ASCII.GetString($bytes)
+          $ver = [regex]::Match($text, 'mpv v?0\.(\d+)\.(\d+)')
+          if (-not $ver.Success) { throw 'cannot find mpv version string' }
+          $minor = [int]$ver.Groups[1].Value
+          if ($minor -lt 42) { throw "mpv 0.$($ver.Value) < 0.42: no DV FEL support" }
+          Write-Host "DV libmpv OK: 0.$minor"
+
+      # Shell binary + mpv + bin/ go to bundle ROOT; ui/ and providers/ are
+      # already staged in subfolders by assemble-full.ps1. One complete bundle.
+      - name: Stage shell into bundle
+        shell: pwsh
+        run: |
+          Copy-Item shell\target\x86_64-pc-windows-msvc\release\stremio-shell-ng.exe bundle\ -Force
+          Copy-Item shell\libmpv-2.dll bundle\ -Force
+          Copy-Item shell\bin\* bundle\ -Recurse -Force
+          Copy-Item shell\server.js bundle\ -Force
+          Copy-Item shell\MPV-SOURCE.txt bundle\ -Force
+          Write-Host "complete bundle: $((Get-ChildItem bundle -Recurse -File).Count) files"
 
       # Full log as artifact so we can read the real error (annotations are
       # limited to the last 50 lines, which is often just compiler warnings).
