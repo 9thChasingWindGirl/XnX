@@ -10,6 +10,9 @@ on:
 permissions:
   contents: read
 
+env:
+  UPSTREAM_REPO: Stremio/stremio-shell-ng
+
 jobs:
   check:
     runs-on: windows-2022
@@ -23,6 +26,35 @@ jobs:
 
       - name: disable git eol translation
         run: git config --global core.autocrlf false
+
+      # build.rs needs libmpv-2_x64.zip at the source root. Reuse the exact
+      # same cache key as shell-ng.yml so the 370MB upstream clone is shared.
+      - name: Resolve upstream HEAD
+        id: upstream
+        shell: bash
+        run: |
+          SHA=$(git ls-remote https://github.com/${{ env.UPSTREAM_REPO }}.git refs/heads/main | cut -f1)
+          echo "sha=$SHA" >> $GITHUB_OUTPUT
+
+      - name: Cache upstream binaries
+        id: cache-upstream
+        uses: actions/cache@v4
+        with:
+          path: |
+            upstream/libmpv-2_x64.zip
+            upstream/bin
+            upstream/mpv-x64
+            upstream/server.js
+          key: upstream-bin-${{ steps.upstream.outputs.sha }}
+
+      - name: Fetch upstream binary deps (cache miss only)
+        if: steps.cache-upstream.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: git clone --depth 1 https://github.com/${{ env.UPSTREAM_REPO }}.git upstream
+
+      - name: Stage libmpv zip into source tree
+        shell: pwsh
+        run: Copy-Item upstream\libmpv-2_x64.zip shell\ -Force
 
       - uses: dtolnay/rust-toolchain@stable
         with:
