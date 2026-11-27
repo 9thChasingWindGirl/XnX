@@ -41,6 +41,10 @@ Write-Host 'providers staged (no build needed)'
 # model MUST reach the UI, so UI must consume OUR core-web, not the npm one.
 Write-Host '=== build core-web WASM (wasm-pack) ==='
 Push-Location (Join-Path $Root 'core\stremio-core-web')
+# babel CLI + presets are devDependencies; without npm ci, `npx babel`
+# silently fetches ancient babel@5 which cannot read .babelrc presets.
+& npm ci
+if ($LASTEXITCODE -ne 0) { throw 'core-web npm ci failed' }
 & rustup target add wasm32-unknown-unknown
 & wasm-pack build --no-typescript --no-pack --out-dir wasm_build --release --target web
 if ($LASTEXITCODE -ne 0) { throw 'core-web wasm-pack build failed' }
