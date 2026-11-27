@@ -94,8 +94,23 @@ jobs:
           node providers/scripts/bytenode-build.js providers bundle/providers
           if ($LASTEXITCODE -ne 0) { throw 'bytenode compile failed' }
           $js = Get-ChildItem bundle\providers -Recurse -File -Filter '*.js' |
-            Where-Object { $_.FullName -notmatch 'assets|vendor' }
-          Write-Host "readable Node JS left in bundle: $($js.Count) (should be 0)"
+            Where-Object { $_.FullName -notmatch 'assets|vendor' -and $_.Name -ne 'server.js' }
+          Write-Host "readable Node JS left in bundle: $($js.Count) (should be 0; launcher server.js excluded)"
+
+      - name: Smoke test encrypted provider
+        shell: pwsh
+        run: |
+          # Boot the encrypted launcher and send one IPC manifest request.
+          # This proves .jsc modules (with rewritten relative requires) load
+          # correctly under Node 18.12.1 — compile success alone is not enough.
+          # b64url of {"kind":"local"}
+          $cfg = 'eyJraW5kIjoibG9jYWwifQ'
+          $line = "{`"id`":1,`"method`":`"GET`",`"url`":`"/local/$cfg/manifest.json`"}"
+          $out = $line | node bundle/providers/server.js --ipc 2>&1 | Out-String
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) { throw "encrypted launcher failed: $out" }
+          if ($out -notmatch 'org.xnx.local') { throw "manifest missing from encrypted provider: $out" }
+          Write-Host 'encrypted provider smoke test PASS'
 
       # --- Build the Windows shell from our fork (assemble-full.ps1 cloned it) ---
       # Upstream binaries are NOT in our source repo; cached by upstream HEAD.
