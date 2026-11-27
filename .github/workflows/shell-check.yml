@@ -81,4 +81,12 @@ jobs:
       - name: cargo test (stremio_server + player)
         shell: pwsh
         working-directory: shell
-        run: cargo test --target x86_64-pc-windows-msvc stremio_server
+        run: |
+          cargo test --target x86_64-pc-windows-msvc stremio_server 2>&1 | Tee-Object -FilePath cargo-test.log
+          if ($LASTEXITCODE -ne 0) {
+            Get-Content cargo-test.log | Select-String -Pattern 'FAILED|panicked|failures:|test result: FAILED' -Context 0,3 | ForEach-Object {
+              $line = ($_.Line + ' ' + ($_.Context.PostContext -join ' ')) -replace "`n",' '
+              Write-Output "::error::$line"
+            }
+            exit $LASTEXITCODE
+          }
