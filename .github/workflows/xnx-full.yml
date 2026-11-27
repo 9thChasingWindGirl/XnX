@@ -24,7 +24,9 @@ jobs:
       - name: Verify source repos are green
         shell: pwsh
         env:
-          GH_TOKEN: ${{ secrets.PAT || github.token }}
+          # Must be the PAT with read access to all 4 source repos.
+          # github.token only sees THIS repo -> 403 on cross-repo check-runs.
+          GH_TOKEN: ${{ secrets.PAT }}
         run: ./scripts/verify-sources.ps1
 
       - name: Install toolchains
