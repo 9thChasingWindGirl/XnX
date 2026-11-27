@@ -204,8 +204,31 @@ jobs:
           Copy-Item shell\target\x86_64-pc-windows-msvc\release\stremio-shell-ng.exe bundle\ -Force
           Copy-Item shell\libmpv-2.dll bundle\ -Force
           Copy-Item shell\bin\* bundle\ -Recurse -Force
-          Copy-Item shell\server.js bundle\ -Force
+          # XnX: do NOT ship upstream stremio-service server.js at bundle root.
+          # It starts the old EngineFS/casting server on 11470 and misleads
+          # users into `node server.js`. Our service is providers/server.js,
+          # launched internally by the exe over IPC.
           Copy-Item shell\MPV-SOURCE.txt bundle\ -Force
+          # Startup guide — the exe is the only entry point. There is no
+          # root server.js on purpose (that was the old upstream service).
+          $guide = @(
+            'XnX Player - START HERE',
+            '=======================',
+            '',
+            'Double-click "stremio-shell-ng.exe" to launch. ONLY entry point.',
+            '',
+            'DO NOT run "node server.js" - no root server.js by design.',
+            'Media-source services live in providers/ and are started by the',
+            'exe internally over IPC. The old upstream service opens port',
+            '11470 with casting/EngineFS, which is NOT how this build works.',
+            '',
+            'Layout:',
+            '  stremio-shell-ng.exe  main program',
+            '  ui/                   interface',
+            '  providers/            media-source addons (obfuscated)',
+            '  *.dll, bin/           mpv / playback libraries'
+          )
+          $guide | Set-Content bundle\README-START.txt -Encoding UTF8
           Write-Host "complete bundle: $((Get-ChildItem bundle -Recurse -File).Count) files"
 
       # Full log as artifact so we can read the real error (annotations are
