@@ -19,6 +19,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # XnX build gate: every source repo verifies its OWN code on push.
+      # Never assemble from an unverified commit.
+      - name: Verify source repos are green
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.PAT || github.token }}
+        run: ./scripts/verify-sources.ps1
+
       - name: Install toolchains
         uses: dtolnay/rust-toolchain@stable
         with:
