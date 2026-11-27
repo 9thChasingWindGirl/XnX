@@ -64,6 +64,17 @@ jobs:
             }
           }
 
+      # Full log as artifact so we can read the real error (annotations are
+      # limited to the last 50 lines, which is often just compiler warnings).
+      - name: Upload assemble log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: assemble-log
+          path: assemble.log
+          if-no-files-found: ignore
+          retention-days: 3
+
       - name: Package
         shell: pwsh
         run: |
