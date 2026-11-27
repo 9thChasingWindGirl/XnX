@@ -36,7 +36,15 @@ jobs:
       - name: cargo check
         shell: pwsh
         working-directory: shell
-        run: cargo check --target x86_64-pc-windows-msvc
+        run: |
+          cargo check --target x86_64-pc-windows-msvc 2>&1 | Tee-Object -FilePath cargo-check.log
+          if ($LASTEXITCODE -ne 0) {
+            Get-Content cargo-check.log | Select-String -Pattern '^error' -Context 0,4 | ForEach-Object {
+              $line = ($_.Line + ' ' + ($_.Context.PostContext -join ' ')) -replace "`n",' '
+              Write-Output "::error::$line"
+            }
+            exit $LASTEXITCODE
+          }
 
       - name: cargo test (stremio_server + player)
         shell: pwsh
