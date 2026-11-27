@@ -31,11 +31,25 @@ foreach ($r in $Repos) {
     if ($LASTEXITCODE -ne 0) { throw "clone failed: $($r.Repo)" }
 }
 
-# providers is pure Node.js — no build; stage as-is.
+# providers is pure Node.js — no build, BUT stage only runtime files.
+# Never copy the whole source tree: that leaks .git/ history, docs, tests and
+# tools into the shipped bundle.
+$src = Join-Path $Root 'providers'
 $dst = Join-Path $Root 'bundle\providers'
 New-Item -ItemType Directory -Force $dst | Out-Null
-Copy-Item (Join-Path $Root 'providers\*') $dst -Recurse -Force
-Write-Host 'providers staged (no build needed)'
+# top-level runtime entrypoints
+foreach ($f in @('server.js', 'core.js', 'theme.json', 'index.html')) {
+    Copy-Item (Join-Path $src $f) $dst -Force
+}
+# runtime modules, addons, assets, optional extra bridge
+foreach ($dir in @('core', 'addons', 'assets', 'extra')) {
+    Copy-Item (Join-Path $src $dir) $dst -Recurse -Force
+}
+# strip any dev-only files that may hide inside the staged dirs
+Get-ChildItem $dst -Recurse -File | Where-Object {
+    $_.Name -match '\.(md|log)$' -or $_.FullName -match '[\\/](tests?|tools|\.github)[\\/]'
+} | Remove-Item -Force
+Write-Host "providers staged: $((Get-ChildItem $dst -Recurse -File).Count) runtime files (no .git/docs/tests)"
 
 # core-web WASM -> npm package. Our fork's endpoint-free streaming_server
 # model MUST reach the UI, so UI must consume OUR core-web, not the npm one.
