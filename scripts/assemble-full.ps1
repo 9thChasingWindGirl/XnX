@@ -82,5 +82,10 @@ if ($LASTEXITCODE -ne 0) { throw 'UI build failed' }
 Pop-Location
 New-Item -ItemType Directory -Force (Join-Path $Root 'bundle\ui') | Out-Null
 Copy-Item (Join-Path $Root 'ui\build\*') (Join-Path $Root 'bundle\ui') -Recurse -Force
+# XnX: the UI now runs core on the main thread and reads the wasm straight from
+# disk (no worker, no fetch), so the wasm must ship next to index.html. webpack
+# no longer emits it as an asset once the worker entry is gone.
+Copy-Item (Join-Path $Root 'core\stremio-core-web\stremio_core_web_bg.wasm') (Join-Path $Root 'bundle\ui\stremio_core_web_bg.wasm') -Force
+Write-Host "ui wasm staged: $((Get-Item (Join-Path $Root 'bundle\ui\stremio_core_web_bg.wasm')).Length) bytes"
 
 Write-Host "bundle staged: $((Get-ChildItem (Join-Path $Root 'bundle') -Recurse -File).Count) files"
