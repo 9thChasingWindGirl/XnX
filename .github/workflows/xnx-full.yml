@@ -6,6 +6,12 @@ name: xnx-full build
 on:
   # XnX: full assemble needs all four private repos + PAT; run manually only.
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'fast = reuse artifacts published by each repo CI (default); full = build everything from source'
+        type: choice
+        options: [fast, full]
+        default: fast
 
 permissions:
   contents: read
@@ -19,9 +25,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Fast path: take the outputs each repo already built on main.
+      - name: Download repo artifacts (fast)
+        if: ${{ inputs.mode == 'fast' }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.PAT || github.token }}
+          BUILD_ORG: ${{ github.repository_owner }}
+        run: ./scripts/fetch-artifacts.ps1
+
       # XnX build gate: every source repo verifies its OWN code on push.
-      # Never assemble from an unverified commit.
+      # Never assemble from an unverified commit. Skipped in fast mode — an
+      # artifact only exists because that repo's CI passed.
       - name: Verify source repos are green
+        if: ${{ inputs.mode != 'fast' }}
         shell: pwsh
         env:
           # Must be the PAT with read access to all 4 source repos.
@@ -30,6 +47,7 @@ jobs:
         run: ./scripts/verify-sources.ps1
 
       - name: Install toolchains
+        if: ${{ inputs.mode != 'fast' }}
         uses: dtolnay/rust-toolchain@stable
         with:
           # wasm32 for core-web, msvc for the Windows shell binary
@@ -41,6 +59,7 @@ jobs:
           node-version: '22'
 
       - name: Cache wasm-pack binary
+        if: ${{ inputs.mode != 'fast' }}
         id: cache-wasm-pack
         uses: actions/cache@v4
         with:
@@ -48,15 +67,17 @@ jobs:
           key: wasm-pack-v1
 
       - name: Install wasm-pack
-        if: steps.cache-wasm-pack.outputs.cache-hit != 'true'
+        if: ${{ inputs.mode != 'fast' && steps.cache-wasm-pack.outputs.cache-hit != 'true' }}
         shell: pwsh
         run: cargo install wasm-pack --locked
 
       # Assemble sources from private repos. Same PAT as the check workflows
       # (verified working); READ_PRIVATE_REPOS was never configured.
+      # In fast mode only the providers staging runs (XNX_STAGE_ONLY=1).
       - name: Assemble sources
         shell: pwsh
         env:
+          XNX_STAGE_ONLY: ${{ inputs.mode == 'fast' && '1' || '0' }}
           GH_TOKEN: ${{ secrets.PAT || github.token }}
         run: |
           git config --global core.autocrlf false
@@ -105,77 +126,64 @@ jobs:
             }
           }
 
-      # --- Encrypt providers: compile Node-side JS to V8 bytecode (.jsc) ---
-      # Must use the SAME Node version as stremio-runtime.exe (18.12.1 x64).
-      # V8 rejects bytecode compiled by a different Node version.
-      # --- Obfuscate providers Node-side JS (version-agnostic, no ABI lock) ---
-      # Unlike V8 bytecode, obfuscated JS runs on any Node version/arch.
-      - name: Obfuscate providers
-        shell: pwsh
-        run: |
-          node --version
-          Push-Location providers
-          npm install javascript-obfuscator@5.11.0 --no-save --ignore-scripts
-          if ($LASTEXITCODE -ne 0) { throw 'obfuscator install failed' }
-          Pop-Location
-          node providers/scripts/obfuscate.js providers bundle/providers
-          if ($LASTEXITCODE -ne 0) { throw 'obfuscation failed' }
+      # XnX: providers ships as plain, readable JS. The repo is public (people
+      # may write their own XnX addons) and it exposes nothing about core or
+      # shell — those ship as wasm and a native exe respectively.
 
-      - name: Smoke test obfuscated provider
+      - name: Smoke test provider server
         shell: pwsh
         run: |
-          # Boot the obfuscated server and send one IPC manifest request.
+          # Boot the provider server and send one IPC manifest request.
           # Runs on the CI's default Node (22) — proving no Node-version lock.
           $cfg = 'eyJraW5kIjoibG9jYWwifQ'  # b64url of {"kind":"local"}
           $line = "{`"id`":1,`"method`":`"GET`",`"url`":`"/local/$cfg/manifest.json`"}"
           $out = $line | node bundle/providers/server.js --ipc 2>&1 | Out-String
           Write-Host $out
-          if ($LASTEXITCODE -ne 0) { throw "obfuscated server failed: $out" }
-          if ($out -notmatch 'org.xnx.local') { throw "manifest missing from obfuscated provider: $out" }
-          Write-Host 'obfuscated provider smoke test PASS (Node-version-agnostic)'
+          if ($LASTEXITCODE -ne 0) { throw "provider server failed: $out" }
+          if ($out -notmatch 'org.xnx.local') { throw "manifest missing from provider: $out" }
+          Write-Host 'provider smoke test PASS (Node-version-agnostic)'
 
       # --- Build the Windows shell from our fork (assemble-full.ps1 cloned it) ---
       # Upstream binaries are NOT in our source repo; cached by upstream HEAD.
-      - name: Resolve upstream HEAD
-        id: upstream
-        shell: bash
-        run: |
-          # assemble-full set an Authorization extraheader with our scoped PAT
-          # — sending it to Stremio's public repo returns HTTP 400. Unset it.
-          git config --global --unset-all "http.https://github.com/.extraheader" 2>/dev/null || true
-          SHA=$(git ls-remote https://github.com/Stremio/stremio-shell-ng.git refs/heads/main | cut -f1)
-          if [ -z "$SHA" ]; then echo "ls-remote failed" >&2; exit 1; fi
-          echo "sha=$SHA" >> $GITHUB_OUTPUT
-
-      - name: Cache upstream binaries
+      # These two are UNMODIFIED upstream mpv binaries (LGPL): libmpv-2_x64.zip
+      # for build.rs and mpv-x64/*.lib for linking. Mirroring them into our
+      # release would not improve de-branding, so they stay upstream but are
+      # PINNED to a commit and cached. bin/ (82 MB of ffmpeg DLLs) is dropped:
+      # it only served the streaming server we removed.
+      - name: Cache pinned binary deps
         id: cache-upstream
         uses: actions/cache@v4
         with:
           path: |
-            upstream/libmpv-2_x64.zip
-            upstream/bin
-            upstream/mpv-x64
-            upstream/server.js
-          key: upstream-bin-${{ steps.upstream.outputs.sha }}
+            deps/libmpv-2_x64.zip
+            deps/mpv-x64
+          key: mpv-upstream-e148e2a6801b4af3afd143262f2280a866da7c87
 
-      - name: Fetch upstream binary deps (cache miss only)
+      - name: Fetch pinned binary deps (cache miss only)
         if: steps.cache-upstream.outputs.cache-hit != 'true'
         shell: pwsh
+        env:
+          MPV_SHA: e148e2a6801b4af3afd143262f2280a866da7c87
         run: |
-          # clear our scoped PAT header before cloning the public upstream repo
-          git config --global --unset-all "http.https://github.com/.extraheader" 2>$null
-          git clone --depth 1 https://github.com/Stremio/stremio-shell-ng.git upstream
-          if ($LASTEXITCODE -ne 0) { throw 'upstream clone failed' }
+          $base = "https://raw.githubusercontent.com/Stremio/stremio-shell-ng/$env:MPV_SHA"
+          New-Item -ItemType Directory -Force deps\mpv-x64 | Out-Null
+          curl.exe -fL --retry 5 --retry-all-errors -o deps\libmpv-2_x64.zip "$base/libmpv-2_x64.zip"
+          if ($LASTEXITCODE -ne 0) { throw 'libmpv download failed' }
+          foreach ($file in @('mpv.lib', 'mpv.exp', 'mpv.def')) {
+            curl.exe -fL --retry 5 --retry-all-errors -o "deps\mpv-x64\$file" "$base/mpv-x64/$file"
+            if ($LASTEXITCODE -ne 0) { throw "mpv-x64/$file download failed" }
+          }
+          if (-not (Test-Path deps\libmpv-2_x64.zip)) { throw 'libmpv zip missing' }
+          if (-not (Test-Path deps\mpv-x64\mpv.lib)) { throw 'mpv.lib missing' }
 
-      - name: Stage upstream binaries into shell tree
+      - name: Stage pinned binaries into shell tree
         shell: pwsh
         run: |
-          Copy-Item upstream\libmpv-2_x64.zip shell\ -Force
-          Copy-Item upstream\bin shell\ -Recurse -Force
-          Copy-Item upstream\mpv-x64 shell\ -Recurse -Force
-          Copy-Item upstream\server.js shell\ -Force
+          Copy-Item deps\libmpv-2_x64.zip shell\ -Force
+          Copy-Item deps\mpv-x64 shell\ -Recurse -Force
 
       - name: Build shell (release)
+        if: ${{ inputs.mode != 'fast' }}
         shell: cmd
         working-directory: shell
         run: cargo build --release --target x86_64-pc-windows-msvc
@@ -265,7 +273,9 @@ jobs:
         run: |
           Copy-Item shell\target\x86_64-pc-windows-msvc\release\stremio-shell-ng.exe bundle\ -Force
           Copy-Item shell\libmpv-2.dll bundle\ -Force
-          Copy-Item shell\bin\* bundle\ -Recurse -Force
+          # XnX: bin/ (upstream ffmpeg DLLs) is no longer fetched — it only
+          # served the removed streaming server. Copy it only if someone staged it.
+          if (Test-Path shell\bin) { Copy-Item shell\bin\* bundle\ -Recurse -Force }
           # XnX: do NOT ship upstream stremio-service server.js at bundle root.
           # It starts the old EngineFS/casting server on 11470 and misleads
           # users into `node server.js`. Our service is providers/server.js,
@@ -291,7 +301,7 @@ jobs:
             'Layout:',
             '  stremio-shell-ng.exe  main program',
             '  ui/                   interface',
-            '  providers/            media-source addons (obfuscated)',
+            '  providers/            media-source addons (plain JS, public repo)',
             '  *.dll, bin/           mpv / playback libraries'
           )
           $guide | Set-Content bundle\README-START.txt -Encoding UTF8
