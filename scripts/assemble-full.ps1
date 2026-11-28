@@ -26,9 +26,16 @@ $Repos = @(
 
 foreach ($r in $Repos) {
     $dest = Join-Path $Root $r.Name
-    Write-Host "=== checkout $($r.Repo) -> $($r.Name) ==="
-    git clone --depth 1 "https://github.com/$Org/$($r.Repo).git" $dest
-    if ($LASTEXITCODE -ne 0) { throw "clone failed: $($r.Repo)" }
+    # XnX: pin the exact ref per repo so a build is reproducible. Set
+    # BUILD_REF_CORE / BUILD_REF_UI / BUILD_REF_SHELL / BUILD_REF_PROVIDERS
+    # to a tag (or branch) to override; defaults to main.
+    $refVar = "BUILD_REF_$($r.Name.ToUpper())"
+    $ref = [Environment]::GetEnvironmentVariable($refVar)
+    if (-not $ref) { $ref = 'main' }
+    Write-Host "=== checkout $($r.Repo)@$ref -> $($r.Name) ==="
+    git clone --depth 1 --branch $ref "https://github.com/$Org/$($r.Repo).git" $dest
+    if ($LASTEXITCODE -ne 0) { throw "clone failed: $($r.Repo)@$ref" }
+    git -C $dest rev-parse HEAD | ForEach-Object { Write-Host "$($r.Name) HEAD $_" }
 }
 
 # providers is pure Node.js — no build, BUT stage only runtime files.

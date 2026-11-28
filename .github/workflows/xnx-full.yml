@@ -62,6 +62,36 @@ jobs:
           git config --global core.autocrlf false
           ./scripts/assemble-full.ps1 2>&1 | Tee-Object -FilePath assemble.log
 
+      # XnX: de-branding gate. Fails on strings that would make the shipped
+      # app install Stremio over itself, and reports the remaining branded
+      # endpoints so they can be tracked down without blocking every build.
+      - name: Branding gate
+        shell: pwsh
+        run: |
+          $hard = @('updater/check?product=stremio-shell-ng')
+          $warn = @('web.stremio.com','stremio-mixer.schneider.ax','likes.stremio.com','link.stremio.com','api.strem.io','stremio.net')
+          $hits = 0
+          $warns = 0
+          $files = Get-ChildItem -Path bundle -Recurse -File |
+            Where-Object { $_.Extension -in @('.js','.html','.json','.css','.exe','.dll') }
+          foreach ($file in $files) {
+            $text = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($file.FullName))
+            foreach ($needle in $hard) {
+              if ($text.Contains($needle)) {
+                Write-Host "::error::upstream updater endpoint in $($file.FullName)"
+                $hits++
+              }
+            }
+            foreach ($needle in $warn) {
+              if ($text.Contains($needle)) {
+                Write-Host "::warning::branded endpoint '$needle' in $($file.FullName)"
+                $warns++
+              }
+            }
+          }
+          Write-Host "branding gate: hard=$hits report=$warns"
+          if ($hits -gt 0) { exit 1 }
+
       # The assemble script uses $ErrorActionPreference=Stop and throws, which
       # aborts the pipeline before inline error handling can run. A separate
       # failure-only step always sees the log and surfaces it as annotations.
